@@ -5,29 +5,50 @@ include 'config.php';
 $success = false;
 $error = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $nume = mysqli_real_escape_string($conn, $_POST['nume']);
-    $prenume = mysqli_real_escape_string($conn, $_POST['prenume']);
-    $telefon = mysqli_real_escape_string($conn, $_POST['telefon']);
-    $email = mysqli_real_escape_string($conn, $_POST['email']);
-    $cnp = mysqli_real_escape_string($conn, $_POST['cnp']);
+    // Retrieve raw POST data
+    $nume = $_POST['nume'];
+    $prenume = $_POST['prenume'];
+    $telefon = $_POST['telefon'];
+    $email = $_POST['email'];
+    $cnp = $_POST['cnp'];
 
     if ($nume && $prenume && $telefon && $email && $cnp) {
-        // Verificare CNP sau Email existente
-        $check = mysqli_query($conn, "SELECT 1 FROM utilizatori WHERE CNP='$cnp' OR Email='$email' LIMIT 1");
-        if (mysqli_num_rows($check) > 0) {
-            $error = 'Eroare la inregistrare - Suna la 27009!';
-        } else {
-            $sql = "INSERT INTO utilizatori (Nume, Prenume, Telefon, Email, CNP) VALUES ('$nume', '$prenume', '$telefon', '$email', '$cnp')";
-            $result = @mysqli_query($conn, $sql);
-            if ($result) {
-                $success = true;
+        // Verificare CNP sau Email existente using prepared statement
+        $sql_check = "SELECT 1 FROM utilizatori WHERE CNP=? OR Email=? LIMIT 1";
+        $stmt_check = mysqli_prepare($conn, $sql_check);
+        if ($stmt_check) {
+            mysqli_stmt_bind_param($stmt_check, "ss", $cnp, $email);
+            mysqli_stmt_execute($stmt_check);
+            mysqli_stmt_store_result($stmt_check);
+
+            if (mysqli_stmt_num_rows($stmt_check) > 0) {
+                $error = 'Eroare la inregistrare - Suna la 27009!';
             } else {
-                if (strpos(mysqli_error($conn), 'Duplicate entry') !== false) {
-                    $error = 'Eroare la inregistrare - Suna la 27009';
+                // Insert new user using prepared statement
+                $sql_insert = "INSERT INTO utilizatori (Nume, Prenume, Telefon, Email, CNP) VALUES (?, ?, ?, ?, ?)";
+                $stmt_insert = mysqli_prepare($conn, $sql_insert);
+                if ($stmt_insert) {
+                    mysqli_stmt_bind_param($stmt_insert, "sssss", $nume, $prenume, $telefon, $email, $cnp);
+                    if (mysqli_stmt_execute($stmt_insert)) {
+                        $success = true;
+                    } else {
+                        if (mysqli_errno($conn) == 1062) { // Error code for Duplicate entry
+                            $error = 'Eroare la inregistrare - Suna la 27009';
+                        } else {
+                            error_log("Error executing insert statement in inregistrare.php: " . mysqli_stmt_error($stmt_insert));
+                            $error = 'A apărut o eroare în timpul înregistrării. Vă rugăm să încercați din nou mai târziu.';
+                        }
+                    }
+                    mysqli_stmt_close($stmt_insert);
                 } else {
-                    $error = 'Eroare la salvare: ' . htmlspecialchars(mysqli_error($conn));
+                    error_log("Error preparing insert statement in inregistrare.php: " . mysqli_error($conn));
+                    $error = 'A apărut o eroare în timpul înregistrării. Vă rugăm să încercați din nou mai târziu.';
                 }
             }
+            mysqli_stmt_close($stmt_check);
+        } else {
+            error_log("Error preparing select statement in inregistrare.php: " . mysqli_error($conn));
+            $error = 'A apărut o eroare în timpul înregistrării. Vă rugăm să încercați din nou mai târziu.';
         }
     } else {
         $error = 'Toate câmpurile sunt obligatorii!';

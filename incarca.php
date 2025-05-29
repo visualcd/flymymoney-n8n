@@ -79,6 +79,21 @@ foreach ($_FILES['files']['tmp_name'] as $idx => $tmp_name) {
         );
         continue;
     }
+
+    // Server-side file type validation
+    $finfo = finfo_open(FILEINFO_MIME_TYPE);
+    $mime_type = finfo_file($finfo, $tmp_name);
+    finfo_close($finfo);
+
+    if ($mime_type !== 'application/pdf') {
+        $results[] = array(
+            'file' => $original_name,
+            'status' => 'error',
+            'message' => 'Invalid file type. Only PDF files are allowed.'
+        );
+        continue;
+    }
+
     // Validate filename and extract CNP
     if (!preg_match('/^(\d{13})_\d{2}_' . $current_month . '_' . $current_year . '\.pdf$/', $original_name, $matches)) {
         $results[] = array(
@@ -93,7 +108,7 @@ foreach ($_FILES['files']['tmp_name'] as $idx => $tmp_name) {
 
     // Ensure upload directory exists
     if (!is_dir($upload_dir)) {
-        if (!mkdir($upload_dir, 0777, true)) {
+        if (!mkdir($upload_dir, 0755, true)) {
             $results[] = array(
                 'file' => $original_name,
                 'status' => 'error',
@@ -114,26 +129,43 @@ foreach ($_FILES['files']['tmp_name'] as $idx => $tmp_name) {
     }
     // Build download URL (relative to web root)
     $relative_url = "$current_year/$current_month/$new_filename";
-    // Insert into database (procedural)
-    $sql = "INSERT INTO fluturasi (CNP_utilizator, data_incarcare, Fisier) VALUES ('$cnp', CURDATE(), '$relative_url')
-            ON DUPLICATE KEY UPDATE data_incarcare=CURDATE(), Fisier='$relative_url'";
-    if (mysqli_query($conn, $sql)) {
-        $results[] = array(
-            'file' => $original_name,
-            'status' => 'success',
-            'message' => 'Uploaded successfully.'
-        );
+    // Insert into database (using prepared statements)
+    $sql = "INSERT INTO fluturasi (CNP_utilizator, data_incarcare, Fisier) VALUES (?, CURDATE(), ?)
+            ON DUPLICATE KEY UPDATE data_incarcare=CURDATE(), Fisier=?";
+    
+    $stmt = mysqli_prepare($conn, $sql);
+    if ($stmt) {
+        // For ON DUPLICATE KEY UPDATE, parameters are bound for both INSERT and UPDATE parts.
+        // So, $cnp is for INSERT, $relative_url is for INSERT, and $relative_url is for UPDATE.
+        mysqli_stmt_bind_param($stmt, "sss", $cnp, $relative_url, $relative_url);
+        
+        if (mysqli_stmt_execute($stmt)) {
+            $results[] = array(
+                'file' => $original_name,
+                'status' => 'success',
+                'message' => 'Uploaded successfully.'
+            );
+        } else {
+            error_log("DB execute error in incarca.php: " . mysqli_stmt_error($stmt));
+            $results[] = array(
+                'file' => $original_name,
+                'status' => 'error',
+                'message' => 'A database error occurred during execution.'
+            );
+        }
+        mysqli_stmt_close($stmt);
     } else {
+        error_log("DB prepare error in incarca.php: " . mysqli_error($conn));
         $results[] = array(
             'file' => $original_name,
             'status' => 'error',
-            'message' => 'DB error: ' . mysqli_error($conn)
+            'message' => 'A database error occurred during preparation.'
         );
     }
 }
 // Show results
 foreach ($results as $res) {
     $class = $res['status'] === 'success' ? 'success' : 'error';
-    echo "<div class='$class'>{$res['file']}: {$res['message']}</div>";
+    echo "<div class='$class'>" . htmlspecialchars($res['file'], ENT_QUOTES, 'UTF-8') . ": " . htmlspecialchars($res['message'], ENT_QUOTES, 'UTF-8') . "</div>";
 }
 ?>
